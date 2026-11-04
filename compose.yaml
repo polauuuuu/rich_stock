@@ -1,0 +1,20 @@
+services:
+  rich-stock:
+    build: .
+    image: rich-stock:local
+    container_name: rich-stock
+    init: true
+    ports:
+      - "127.0.0.1:6001:6001"
+      - "127.0.0.1:6002:6002"
+    environment:
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:-}
+      DATA_DIR: /data
+      OMP_NUM_THREADS: "2"
+    volumes:
+      - research-data:/data
+    restart: unless-stopped
+    stop_grace_period: 60s
+volumes:
+  research-data:

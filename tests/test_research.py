@@ -4,6 +4,11 @@ import pytest
 from backend.research import features, backtest, chronological_split
 
 
+def test_sessions_accept_holiday_boundaries():
+    from backend.research import sessions
+    assert str(sessions('2026-01-01','2026-01-04')[0].date()) == '2026-01-02'
+
+
 def frame(prices, volumes=None, dates=None):
     dates = dates if dates is not None else pd.bdate_range('2025-02-03', periods=len(prices))
     return pd.DataFrame({'symbol': 'TEST', 'date': dates, 'open': prices,

@@ -13,7 +13,7 @@ DEFAULTS = dict(down_days=3, volume_days=3, min_price=5, min_dollar_volume=1_000
 
 @lru_cache(maxsize=32)
 def sessions(start, end):
-    cal = xcals.get_calendar('XNYS', start=start, end=end)
+    cal = xcals.get_calendar('XNYS', start=pd.Timestamp(start) - pd.Timedelta(days=10), end=pd.Timestamp(end) + pd.Timedelta(days=10))
     return cal.sessions_in_range(start, end).tz_localize(None)
 
 

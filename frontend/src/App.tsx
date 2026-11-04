@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { Activity, ArrowDown, ArrowDownToLine, ArrowRight, ArrowUpRight, BarChart3, Check, ChevronLeft, ChevronRight, Database, FlaskConical, Layers3, LoaderCircle, Play, RefreshCw, Search, SlidersHorizontal, Sparkles, X, CircleHelp, TrendingUp, Sun, Moon } from 'lucide-react'
 import { Area, AreaChart, Bar, Brush, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts'
 import CandleChart from './CandleChart'
+import { completedDownloads } from './download-refresh'
 import { direction } from './market'
 import { loadResult } from './result-loader'
 
@@ -76,22 +77,29 @@ export default function App() {
   const [submitting, setSubmitting] = useState(false)
   const [cfg, setCfg] = useState<Config>({ decline_mode: 'both', down_days: 3, volume_days: 3, min_price: 5, min_dollar_volume: 1000000, holding_days: 5, stop_loss: .05, take_profit: .1, cost_bps: 10, max_positions: 5, capital: 100000, top_k: 5, start: '2025-11-03', end: '2026-11-03', model: 'logistic', symbols: '' })
   const [scanCfg, setScanCfg] = useState(cfg)
+  const [chartRevision, setChartRevision] = useState(0)
   const scanRequest = useRef(0)
   const loadedResults = useRef(new Set<string>())
   const inflightResults = useRef(new Set<string>())
   const pendingJob = useRef<Job | null>(null)
+  const downloadStates = useRef(new Map<string,string>())
+  const appliedFilters = useRef(scanCfg)
+  appliedFilters.current = scanCfg
   const update = <K extends keyof Config>(key: K, value: Config[K]) => setCfg(c => ({ ...c, [key]: value }))
   const numberInput = (key: keyof Config, min = 0, step = 1, multiplier = 1) => <input type="number" min={min} step={step} value={Number(cfg[key]) * multiplier} onChange={e => update(key, Number(e.target.value) / multiplier as never)} />
   const scanParams = (config = scanCfg) => new URLSearchParams({ source, decline_mode: config.decline_mode, down_days: String(config.down_days), volume_days: String(config.volume_days), min_price: String(config.min_price), min_dollar_volume: String(config.min_dollar_volume), ...(asOf ? { as_of: asOf } : {}) })
 
   async function refreshStatus() { setStatus(await api<Status>('/status')) }
-  async function scan(config = cfg) {
+  async function scan(config = cfg, latest = false) {
     const id = ++scanRequest.current
-    setBusy(true); setError(''); setPage(0); setResult(null)
+    setBusy(true); setError(''); setPage(0)
     try {
-      const data = await api<{ rows: Row[]; as_of: string }>('/scan?' + scanParams(config))
+      const params = scanParams(config)
+      if (latest) params.delete('as_of')
+      const data = await api<{ rows: Row[]; as_of: string }>('/scan?' + params)
       if (id !== scanRequest.current) return
       setRows(data.rows); setEffective(data.as_of); setScanCfg(config)
+      setChartRevision(revision => revision + 1)
       setSelected(previous => data.rows.some(r => r.symbol === previous) ? previous : data.rows[0]?.symbol || '')
     } catch (e) { if (id === scanRequest.current) { setError((e as Error).message); setRows([]); setSelected(''); setBars([]) } }
     finally { if (id === scanRequest.current) setBusy(false) }
@@ -114,7 +122,7 @@ export default function App() {
     const params = new URLSearchParams({ source, decline_mode: scanCfg.decline_mode, down_days: String(scanCfg.down_days), volume_days: String(scanCfg.volume_days), ...(effective ? { as_of: effective } : {}) })
     api<{ bars: Row[] }>('/bars/' + encodeURIComponent(selected) + '?' + params).then(r => { if (active) setBars(r.bars) }).catch(e => { if (active) setError(e.message) }).finally(() => { if (active) setChartBusy(false) })
     return () => { active = false }
-  }, [selected, source, effective, scanCfg])
+  }, [selected, source, effective, scanCfg, chartRevision])
   useEffect(() => {
     let active = true
     let polls = 0
@@ -123,6 +131,9 @@ export default function App() {
         const all = await api<Job[]>('/jobs')
         if (!active) return
         setJobs(all)
+        if (completedDownloads(all, downloadStates.current).length) {
+          setAsOf(''); refreshStatus().catch(() => {}); void scan(appliedFilters.current, true)
+        }
         if (++polls % 5 === 0) refreshStatus().catch(() => {})
         const done = all.find(j => j.id === resultId && j.state === 'completed')
         if (done) {
@@ -146,8 +157,20 @@ export default function App() {
       if (!cfg.end) delete config.end
       const data = await api<{ id: string }>('/jobs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(config) })
       setResultId(data.id); loadedResults.current.delete(data.id)
+      if (kind === 'download') downloadStates.current.set(data.id, 'queued')
       setJobs(await api<Job[]>('/jobs'))
     } catch (e) { setError((e as Error).message) } finally { setSubmitting(false) }
+  }
+
+  async function updateLatest() {
+    setSubmitting(true); setError('')
+    try {
+      // Omit end: backend resolves the latest completed NY session, never a hard-coded date.
+      const data = await api<{id:string}>('/jobs', {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({kind:'download',source:'live',symbols:''})})
+      downloadStates.current.set(data.id,'queued')
+      setResultId(data.id); loadedResults.current.delete(data.id)
+      setJobs(await api<Job[]>('/jobs'))
+    } catch(e) { setError((e as Error).message) } finally { setSubmitting(false) }
   }
 
   const coverage = status?.datasets[source]
@@ -172,14 +195,14 @@ export default function App() {
       <div className="sidebar-bottom"><div className="research-note"><Sparkles size={18}/><strong>由訊號，到證據。</strong><p>先驗證規則，再讓模型幫你排序。</p><span>研究工具 · 不執行交易</span></div><div className="profile"><div className="avatar">R</div><div>個人研究空間<small>Local workspace</small></div><span className="online-dot"/></div></div>
     </aside>
     <main><header className="topbar"><div className="breadcrumb">工作空間 <ChevronRight size={13}/> <span>{labels[tab]}</span></div><div className="top-actions"><button className="theme-toggle" aria-label={theme === 'dark' ? '切換淺色模式' : '切換深色模式'} onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}<span>{theme === 'dark' ? '淺色' : '深色'}</span></button><span className="local-status"><span className="online-dot"/>本機運行</span><span className="badge">ALPACA SIP · 真實數據</span></div></header>
-      <div className="content"><div className="page-heading"><div><div className="eyebrow">{tab === 'scan' ? 'DISCOVER THE NEXT SETUP' : tab === 'backtest' ? 'TEST BEFORE YOU TRUST' : tab === 'ml' ? 'EVIDENCE OVER INTUITION' : 'YOUR RESEARCH FOUNDATION'}</div><h1>{labels[tab]}<span className="beta">RESEARCH</span></h1><p>{tab === 'scan' ? '捕捉連跌縮量形態，尋找值得進一步研究的回調機會。' : tab === 'backtest' ? '將交易假設放進歷史，觀察成本、回撤與真正的持倉結果。' : tab === 'ml' ? '以時間切分驗證，研究模型能否超越純規則篩選。' : '管理股票池、歷史日線及下載工作，讓每個結果都有依據。'}</p></div><button className="button secondary" onClick={() => { refreshStatus().catch(e => setError(e.message)); if (tab === 'scan') scan() }}><RefreshCw size={15}/>重新整理</button></div>
-        <div className="source-banner live"><div><span className="banner-dot"/><strong>Alpaca SIP · 真實歷史數據</strong><span>已下載 {coverage?.symbols || 0} / {status?.universe?.included || '—'} 隻上市股票。{fullMarketDone ? '完整名單已處理；個別股票可能沒有可用日線，詳見下載結果。' : status?.universe && (coverage?.symbols || 0) < status.universe.included ? '股票池尚未下載完成，掃描只涵蓋已保存股票。' : '使用當前上市名單，存在生存者偏差。'}</span></div><button className="text-button" onClick={() => setTab('data')}>管理下載 <ArrowRight size={13}/></button></div>
+      <div className="content"><div className="page-heading"><div><div className="eyebrow">{tab === 'scan' ? 'DISCOVER THE NEXT SETUP' : tab === 'backtest' ? 'TEST BEFORE YOU TRUST' : tab === 'ml' ? 'EVIDENCE OVER INTUITION' : 'YOUR RESEARCH FOUNDATION'}</div><h1>{labels[tab]}<span className="beta">RESEARCH</span></h1><p>{tab === 'scan' ? '捕捉連跌縮量形態，尋找值得進一步研究的回調機會。' : tab === 'backtest' ? '將交易假設放進歷史，觀察成本、回撤與真正的持倉結果。' : tab === 'ml' ? '以時間切分驗證，研究模型能否超越純規則篩選。' : '管理股票池、歷史日線及下載工作，讓每個結果都有依據。'}</p></div><div className="data-actions"><button className="button secondary" title="只讀取已下載資料，不會向 Alpaca 下載" disabled={busy} onClick={() => { refreshStatus().catch(e => setError(e.message)); if (tab === 'scan') scan() }}>{busy ? <LoaderCircle size={15} className="spin"/> : <RefreshCw size={15}/>}重新掃描本機資料</button><button className="button primary" title="從 Alpaca 更新全股票池；完成後自動掃描及更新圖表" disabled={submitting || !!activeJob} onClick={updateLatest}><ArrowDownToLine size={15}/>{submitting ? '提交中…' : activeJob?.kind === 'download' ? '下載進行中…' : '下載最新數據'}</button></div></div>
+        <div className="source-banner live"><div><span className="banner-dot"/><strong>Alpaca SIP · 真實歷史數據 · 資料截至 {coverage?.end || '尚未下載'}</strong><span>已下載 {coverage?.symbols || 0} / {status?.universe?.included || '—'} 隻上市股票。{fullMarketDone ? '完整名單已處理；個別股票可能沒有可用日線，詳見下載結果。' : status?.universe && (coverage?.symbols || 0) < status.universe.included ? '股票池尚未下載完成，掃描只涵蓋已保存股票。' : '使用當前上市名單，存在生存者偏差。'}</span></div><button className="text-button" onClick={() => setTab('data')}>管理下載 <ArrowRight size={13}/></button></div>
         {error && <div className="error" role="alert"><span>{error}</span><button aria-label="關閉錯誤" onClick={() => setError('')}><X size={16}/></button></div>}
         {activeJob && <div className="job-banner"><LoaderCircle size={17} className="spin"/><div><strong>{states[activeJob.state]} · {activeJob.kind === 'train' ? '模型實驗' : activeJob.kind === 'download' ? '數據下載' : '策略回測'}</strong><small>{activeJob.message}</small><progress max={1} value={activeJob.progress}/></div><button className="button secondary small" disabled={activeJob.state === 'cancelling'} onClick={() => api('/jobs/' + activeJob.id + '/cancel', { method: 'POST' }).catch(e => setError(e.message))}>取消</button></div>}
         {currentJob && ['failed', 'cancelled', 'interrupted'].includes(currentJob.state) && <div className="error" role="status">{states[currentJob.state]}：{currentJob.message}</div>}
 
         {tab === 'scan' && <>
-          <section className="stats-grid"><Stat label="研究股票池" value={compact(coverage?.symbols || 0)} sub="隻股票 · 當前資料覆蓋" icon={<Database size={17}/>}/><Stat label="符合形態" value={busy ? '…' : String(rows.length).padStart(2, '0')} sub={`截至 ${effective || '—'} · 已套用篩選`} icon={<Layers3 size={17}/>} color="teal"/><Stat label="平均三日跌幅" value={rows.length ? percent(rows.reduce((s, r) => s + r.return_3, 0) / rows.length * 100) : '—'} sub="候選股的收市價變動" icon={<ArrowDown size={17}/>} color="red"/><Stat label="平均相對成交量" value={rows.length ? fmt(rows.reduce((s, r) => s + r.volume_ratio, 0) / rows.length) + '×' : '—'} sub="當日成交量 ÷ 20 日平均" icon={<Activity size={17}/>}/></section>
+          <div className="update-explainer">「重新掃描」只用本機資料；「下載最新數據」會更新整個股票池，完成後自動更新候選股及 K 線。只使用已收市日線，並非即時報價。為保持拆股調整一致，下載會刷新已保存的歷史期間。</div><section className="stats-grid"><Stat label="研究股票池" value={compact(coverage?.symbols || 0)} sub="隻股票 · 當前資料覆蓋" icon={<Database size={17}/>}/><Stat label="符合形態" value={busy ? '…' : String(rows.length).padStart(2, '0')} sub={`截至 ${effective || '—'} · 已套用篩選`} icon={<Layers3 size={17}/>} color="teal"/><Stat label="平均三日跌幅" value={rows.length ? percent(rows.reduce((s, r) => s + r.return_3, 0) / rows.length * 100) : '—'} sub="候選股的收市價變動" icon={<ArrowDown size={17}/>} color="red"/><Stat label="平均相對成交量" value={rows.length ? fmt(rows.reduce((s, r) => s + r.volume_ratio, 0) / rows.length) + '×' : '—'} sub="當日成交量 ÷ 20 日平均" icon={<Activity size={17}/>}/></section>
           <section className="panel filter-panel"><div className="section-title"><SlidersHorizontal size={17}/><h2>掃描條件</h2><span>陰燭＝收市低於開市；收市連跌＝低於上日收市</span></div><form onSubmit={e => { e.preventDefault(); scan() }} className="filter-fields"><Field label="截至日期"><input type="date" value={asOf} max={coverage?.end || undefined} onChange={e => setAsOf(e.target.value)} aria-label="截至日期"/></Field><Field label="下跌定義"><select value={cfg.decline_mode} onChange={e => update('decline_mode', e.target.value as Config['decline_mode'])}><option value="both">收市連跌＋連續陰燭</option><option value="close">只計收市逐日下跌</option><option value="candle">只計連續紅色陰燭</option></select></Field><Field label="連續下跌" help="3 日下跌需要 4 個連續交易日收市價">{numberInput('down_days', 1)}<span className="input-unit">日</span></Field><Field label="成交量遞減">{numberInput('volume_days', 1)}<span className="input-unit">日</span></Field><Field label="最低股價 (USD)">{numberInput('min_price', 0, .5)}</Field><Field label="最低平均成交金額">{numberInput('min_dollar_volume', 0, 100000)}</Field><button type="submit" className="button primary" disabled={busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <Search size={16}/>}掃描市場</button></form></section>
           <div className="scan-grid"><section className="panel results-panel"><div className="panel-header"><div><h2>候選股票 <span className="count">{filtered.length}</span></h2><p>縮量形態是研究起點，並非買入訊號</p></div><a className="icon-button" title="匯出已套用條件的完整候選清單" aria-label="匯出 CSV" href={'/api/export?' + new URLSearchParams({ ...Object.fromEntries(scanParams()), ...(effective ? { as_of: effective } : {}) })}><ArrowDownToLine size={17}/></a></div><div className="table-toolbar"><div className="search-input"><Search size={15}/><input placeholder="搜尋股票代號…" aria-label="搜尋股票代號" value={query} onChange={e => { setQuery(e.target.value); setPage(0) }}/></div><span>按欄位排序 <ArrowDown size={12}/></span></div>
             <div className="table-scroll"><table><thead><tr>{([['symbol', '股票'], ['close', '收市價'], ['return_3', '三日變動'], ['volume_ratio', '相對量']] as [keyof Row, string][]).map(([key, label]) => <th key={key}><button onClick={() => changeSort(key)}>{label}{sort.key === key && <span>{sort.asc ? ' ↑' : ' ↓'}</span>}</button></th>)}<th/></tr></thead><tbody>{filtered.slice(page * 8, page * 8 + 8).map((r, i) => <tr key={r.symbol} className={selected === r.symbol ? 'selected-row' : ''} onClick={() => setSelected(r.symbol)}><td><button className="ticker-cell" onClick={() => setSelected(r.symbol)}><span className={'ticker-avatar avatar-' + i % 4}>{r.symbol.slice(0, 1)}</span><span><strong>{r.symbol}</strong><small>US EQUITY</small></span></button></td><td className="numeric">${fmt(r.close)}</td><td className={"numeric " + direction(r.return_3)}>{percent(r.return_3 * 100)}</td><td className="numeric"><span className="volume-pill">{fmt(r.volume_ratio)}×</span></td><td><ChevronRight size={15}/></td></tr>)}</tbody></table>{!rows.length && <div className="empty"><Search size={27}/><strong>{busy ? '正在掃描…' : '暫時冇符合條件嘅股票'}</strong><p>試吓放寬條件，或到數據管理下載歷史資料。</p></div>}</div><div className="table-footer"><span>{filtered.length ? page * 8 + 1 : 0}–{Math.min(page * 8 + 8, filtered.length)} / {filtered.length} 隻</span><div><button className="icon-button" aria-label="上一頁" disabled={page === 0} onClick={() => setPage(p => p - 1)}><ChevronLeft size={16}/></button><button className="icon-button" aria-label="下一頁" disabled={(page + 1) * 8 >= filtered.length} onClick={() => setPage(p => p + 1)}><ChevronRight size={16}/></button></div></div></section>

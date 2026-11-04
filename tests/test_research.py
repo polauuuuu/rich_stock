@@ -21,6 +21,23 @@ def test_three_declines_need_four_closes():
     assert f.signal.tolist() == [False, False, False, True]
 
 
+def test_declining_closes_can_include_green_candle():
+    f = frame([10,9,8,7],[4000,3000,2000,1000])
+    f['open'] = [10,9.5,8.5,6.5]  # Last candle green despite close-to-close decline.
+    assert features(f,3,3,decline_mode='close').signal.iloc[-1]
+    assert not features(f,3,3,decline_mode='both').signal.iloc[-1]
+    f.loc[3,'open']=7.5
+    assert features(f,3,3,decline_mode='both').signal.iloc[-1]
+
+
+def test_candle_mode_needs_three_candles_not_four_closes():
+    f=frame([10,11,12],[3000,2000,1000])
+    f['open']=[11,12,13]
+    f['high']=[12,13,14]
+    assert features(f,3,3,decline_mode='candle').signal.iloc[-1]
+    assert not features(f,3,3,decline_mode='both').signal.iloc[-1]
+
+
 def test_missing_session_breaks_signal():
     f = features(frame([10, 9, 8, 7], [4000, 3000, 2000, 1000],
                        pd.to_datetime(['2025-02-03', '2025-02-04', '2025-02-06', '2025-02-07'])), 3, 3)

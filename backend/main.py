@@ -13,16 +13,16 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, model_validator
 
 from .store import Store
-from .demo import generate_demo
 from .jobs import Jobs
 from .research import DEFAULTS, features, candidate_mask
 
 
 class Experiment(BaseModel):
     kind: Literal['backtest', 'train', 'download']
-    source: Literal['demo', 'live'] = 'demo'
+    source: Literal['live'] = 'live'
     start: date | None = None
     end: date | None = None
+    decline_mode: Literal['close', 'candle', 'both'] = 'both'
     down_days: int = Field(3, ge=1, le=10)
     volume_days: int = Field(3, ge=1, le=10)
     min_price: float = Field(5, ge=0, le=100000)
@@ -54,14 +54,6 @@ def create_app(root=None):
     @asynccontextmanager
     async def lifespan(app):
         store = Store(root or os.getenv('DATA_DIR', 'data'))
-        marker = store.root / 'demo.complete.json'
-        if not marker.exists():
-            demo = generate_demo()
-            for symbol, part in demo.groupby('symbol'):
-                store.merge('demo', symbol, part, replace=True)
-            temp = marker.with_suffix('.tmp')
-            temp.write_text(json.dumps({'version': 1, 'symbols': sorted(demo.symbol.unique())}), encoding='utf-8')
-            temp.replace(marker)
         app.state.store = store
         app.state.jobs = Jobs(store)
         yield
@@ -84,52 +76,51 @@ def create_app(root=None):
     def status():
         path = app.state.store.root / 'universe.json'
         universe = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
-        return dict(datasets={s: app.state.store.coverage(s) for s in ['demo', 'live']},
+        return dict(datasets={s: app.state.store.coverage(s) for s in ['live']},
                     credentials_configured=bool(os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY')),
                     universe=dict(updated=universe['updated'], included=len(universe['included']), excluded=len(universe['excluded'])) if universe else None,
-                    warning='今日股票池有生存者偏差；合成示範數據只用作測試介面，唔係歷史投資成績。')
+                    warning='使用當前上市名單，歷史回測有生存者偏差。')
 
-    def scan_frame(source, as_of, down_days, volume_days, min_price, min_dollar_volume):
+    def scan_frame(source, as_of, down_days, volume_days, min_price, min_dollar_volume, decline_mode):
         f = app.state.store.load(source)
         if as_of:
             f = f[f.date <= pd.Timestamp(as_of)]
         if f.empty:
             raise ValueError('所選日期之前冇數據。')
         latest = f.date.max()
-        f = features(f, down_days, volume_days)
+        f = features(f, down_days, volume_days, decline_mode)
         rows = f[(f.date == latest) & candidate_mask(f, dict(min_price=min_price, min_dollar_volume=min_dollar_volume))]
         return rows.sort_values('volume_ratio'), str(latest.date()), f.symbol.nunique()
 
     @app.get('/api/scan')
-    def scan(source: Literal['demo', 'live'] = 'demo', as_of: date | None = None,
+    def scan(source: Literal['live'] = 'live', as_of: date | None = None, decline_mode: Literal['close', 'candle', 'both'] = 'both',
              down_days: int = Query(3, ge=1, le=10), volume_days: int = Query(3, ge=1, le=10),
              min_price: float = Query(5, ge=0), min_dollar_volume: float = Query(1000000, ge=0)):
-        f, effective, total = scan_frame(source, as_of, down_days, volume_days, min_price, min_dollar_volume)
+        f, effective, total = scan_frame(source, as_of, down_days, volume_days, min_price, min_dollar_volume, decline_mode)
         return dict(rows=records(f), as_of=effective, universe=total, source=source)
 
     @app.get('/api/export')
-    def export(source: Literal['demo', 'live'] = 'demo', as_of: date | None = None,
+    def export(source: Literal['live'] = 'live', as_of: date | None = None, decline_mode: Literal['close', 'candle', 'both'] = 'both',
                down_days: int = Query(3, ge=1, le=10), volume_days: int = Query(3, ge=1, le=10),
                min_price: float = Query(5, ge=0), min_dollar_volume: float = Query(1000000, ge=0)):
-        f, _, _ = scan_frame(source, as_of, down_days, volume_days, min_price, min_dollar_volume)
+        f, _, _ = scan_frame(source, as_of, down_days, volume_days, min_price, min_dollar_volume, decline_mode)
         return Response(f.to_csv(index=False).encode('utf-8-sig'), media_type='text/csv',
                         headers={'Content-Disposition': 'attachment; filename="rich-stock-scan.csv"'})
 
     @app.get('/api/bars/{symbol}')
-    def bars(symbol: str, source: Literal['demo', 'live'] = 'demo', as_of: date | None = None,
+    def bars(symbol: str, source: Literal['live'] = 'live', as_of: date | None = None, decline_mode: Literal['close', 'candle', 'both'] = 'both',
              down_days: int = Query(3, ge=1, le=10), volume_days: int = Query(3, ge=1, le=10)):
-        f = app.state.store.load(source)
-        f = f[f.symbol == symbol.upper()]
+        f = app.state.store.load_symbol(source, symbol.upper())
         if as_of:
             f = f[f.date <= pd.Timestamp(as_of)]
         if f.empty:
             raise HTTPException(404, '搵唔到呢隻股票嘅數據。')
-        out = features(f, down_days, volume_days).tail(300)
+        out = features(f, down_days, volume_days, decline_mode).tail(300)
         return dict(symbol=symbol.upper(), source=source, bars=records(out))
 
     @app.get('/api/jobs')
     def jobs():
-        return app.state.store.jobs()
+        return [j for j in app.state.store.jobs() if j['config'].get('source') == 'live']
 
     @app.post('/api/jobs', status_code=202)
     def submit(config: Experiment):

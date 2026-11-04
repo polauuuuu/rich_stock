@@ -99,13 +99,29 @@ class Jobs:
         if coverage['start']:
             start = min(start, coverage['start'])
             end = max(end, coverage['end'])
-        completed, missing = [], []
+        completed, missing, failures = [], [], []
         with httpx.Client(headers=credentials(), timeout=60) as client:
             for i in range(0, len(symbols), 50):
                 check()
                 batch = symbols[i:i + 50]
                 progress(.05 + .9 * i / max(1, len(symbols)), f'SIP 下載 {i}/{len(symbols)} 隻；完整處理分頁')
-                f = fetch_bars(client, batch, start, end, check)
+                try:
+                    f = fetch_bars(client, batch, start, end, check)
+                except ValueError as error:
+                    if not any(code in str(error) for code in ['HTTP 400', 'HTTP 404', 'HTTP 422']):
+                        raise
+                    # One unsupported listing must not stop the entire market download.
+                    parts = []
+                    for symbol in batch:
+                        check()
+                        try:
+                            part = fetch_bars(client, [symbol], start, end, check)
+                            parts.append(part)
+                        except ValueError as single_error:
+                            if not any(code in str(single_error) for code in ['HTTP 400','HTTP 404','HTTP 422']):
+                                raise
+                            failures.append(dict(symbol=symbol, reason=str(single_error)))
+                    f = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=['symbol'])
                 for symbol in batch:
                     part = f[f.symbol == symbol]
                     if part.empty:
@@ -116,6 +132,6 @@ class Jobs:
                         completed.append(symbol)
         if not completed:
             raise ValueError('API 未返回任何股票數據；請檢查權限及符號。')
-        return dict(downloaded=len(completed), requested=len(symbols), missing=missing, start=start, end=end,
+        return dict(downloaded=len(completed), requested=len(symbols), missing=missing, failures=failures, start=start, end=end,
                     adjustment='split', feed='sip', universe_updated=snapshot['updated'],
                     note='使用當前上市名單，有生存者偏差。為保持拆股調整一致，更新會重新抓取已保存期間；已完成檔案逐隻原子寫入。')

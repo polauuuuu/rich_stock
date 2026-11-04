@@ -3,7 +3,7 @@ import {candleGeometry, direction} from './market'
 
 type Bar = {date:string;open:number;high:number;low:number;close:number;volume:number}
 const format = (v:number) => v.toLocaleString('en-US',{maximumFractionDigits:2})
-export default function CandleChart({bars}:{bars:Bar[]}) {
+export default function CandleChart({bars,signalDays=3}:{bars:Bar[];signalDays?:number}) {
   const host=useRef<HTMLDivElement>(null)
   const [width,setWidth]=useState(800)
   const [range,setRange] = useState<[number,number]>([Math.max(0,bars.length-60),bars.length-1])
@@ -34,6 +34,7 @@ export default function CandleChart({bars}:{bars:Bar[]}) {
     <svg viewBox={`0 0 ${width} 350`} role="img" aria-label="互動日線 K 線及成交量圖：綠色收市高於開市，紅色收市低於開市" onPointerMove={onMove} onPointerLeave={()=>setHover(null)}>
       {[0,1,2,3,4].map(i=><g key={i}><line className="candle-grid" x1={left} x2={left+plotWidth} y1={top+i*height/4} y2={top+i*height/4}/><text x={left+plotWidth+9} y={top+i*height/4+4}>{format(max-(max-min)*i/4)}</text></g>)}
       {data.map((b,i)=>{const g=candleGeometry(b,min,max,height),x=left+(i+.5)*step,w=Math.max(1,Math.min(15,step*.65));return <g key={b.date} className={'candle '+g.direction}>
+        {start+i>=bars.length-signalDays&&<rect className="signal-highlight" x={x-step/2} y={top} width={step} height={300}/>}
         <line x1={x} x2={x} y1={top+g.wickTop} y2={top+g.wickBottom} strokeWidth={Math.max(1,Math.min(2,w/3))}/>
         <rect x={x-w/2} y={top+g.top} width={w} height={g.height}/>
         <rect className="candle-volume" x={x-w/2} y={310-b.volume/maxVolume*48} width={w} height={Math.max(1,b.volume/maxVolume*48)}/>

@@ -17,7 +17,7 @@ def sessions(start, end):
     return cal.sessions_in_range(start, end).tz_localize(None)
 
 
-def features(frame, down_days=3, volume_days=3):
+def features(frame, down_days=3, volume_days=3, decline_mode="close"):
     f = frame.copy().sort_values(['symbol', 'date']).reset_index(drop=True)
     f['date'] = pd.to_datetime(f.date).dt.tz_localize(None).dt.normalize()
     if f.empty:
@@ -27,11 +27,17 @@ def features(frame, down_days=3, volume_days=3):
     f['_session'] = f.date.map(session_ids)
     g = f.groupby('symbol', sort=False)
     decline = g.close.diff().lt(0)
+    if decline_mode == 'candle':
+        decline = f.close.lt(f.open)
+    elif decline_mode == 'both':
+        decline &= f.close.lt(f.open)
+    elif decline_mode != 'close':
+        raise ValueError('未知下跌定義')
     shrink = g.volume.diff().lt(0)
     f['signal'] = decline.groupby(f.symbol).transform(lambda s: s.rolling(down_days).sum().eq(down_days))
     if volume_days > 1:
         f['signal'] &= shrink.groupby(f.symbol).transform(lambda s: s.rolling(volume_days - 1).sum().eq(volume_days - 1))
-    n = max(down_days, volume_days - 1)
+    n = max(down_days - 1 if decline_mode == 'candle' else down_days, volume_days - 1)
     contiguous = g['_session'].diff().eq(1)
     f['signal'] &= contiguous.groupby(f.symbol).transform(lambda s: s.rolling(n).sum().eq(n))
     valid_bar = f[['open', 'high', 'low', 'close', 'volume']].gt(0).all(axis=1)
@@ -53,7 +59,7 @@ def candidate_mask(f, cfg):
 
 def backtest(frame, config, scores=None, check=lambda: None):
     cfg = DEFAULTS | config
-    f = features(frame, cfg['down_days'], cfg['volume_days'])
+    f = features(frame, cfg['down_days'], cfg['volume_days'], cfg.get('decline_mode', 'close'))
     if cfg.get('start'):
         f = f[f.date >= pd.Timestamp(cfg['start'])]
     if cfg.get('end'):
@@ -146,7 +152,7 @@ def train_model(frame, config, check=lambda: None):
     from sklearn.metrics import average_precision_score, roc_auc_score
 
     cfg = DEFAULTS | config
-    f = features(frame, cfg['down_days'], cfg['volume_days'])
+    f = features(frame, cfg['down_days'], cfg['volume_days'], cfg.get('decline_mode', 'close'))
     if cfg.get('start'):
         f = f[f.date >= pd.Timestamp(cfg['start'])].copy()
     if cfg.get('end'):

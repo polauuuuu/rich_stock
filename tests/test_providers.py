@@ -4,6 +4,18 @@ import pytest
 from backend.providers import fetch_bars, parse_directory
 
 
+def test_universe_requests_nasdaq_only():
+    from backend.providers import fetch_universe
+    paths=[]
+    def handler(request):
+        paths.append(request.url.path)
+        return httpx.Response(200,text='Symbol|Security Name|Test Issue|ETF\nTEST|Test Common Stock|N|N')
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        included,_=fetch_universe(client,lambda:None)
+    assert paths==['/dynamic/SymDir/nasdaqlisted.txt']
+    assert included[0]['exchange']=='NASDAQ'
+
+
 def test_pagination_reaches_later_symbols():
     calls = []
     def handler(request):

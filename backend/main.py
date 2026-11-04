@@ -78,7 +78,7 @@ def create_app(root=None):
         universe = json.loads(path.read_text(encoding='utf-8')) if path.exists() else None
         return dict(datasets={s: app.state.store.coverage(s) for s in ['live']},
                     credentials_configured=bool(os.getenv('ALPACA_API_KEY') and os.getenv('ALPACA_SECRET_KEY')),
-                    universe=dict(updated=universe['updated'], included=len(universe['included']), excluded=len(universe['excluded'])) if universe else None,
+                    universe=dict(scope='nasdaq',updated=universe['updated'], included=len(universe['included']), excluded=len(universe['excluded'])) if universe else None,
                     warning='使用當前上市名單，歷史回測有生存者偏差。')
 
     def scan_frame(source, as_of, down_days, volume_days, min_price, min_dollar_volume, decline_mode):
@@ -120,7 +120,7 @@ def create_app(root=None):
 
     @app.get('/api/jobs')
     def jobs():
-        return [j for j in app.state.store.jobs() if j['config'].get('source') == 'live']
+        return [j for j in app.state.store.jobs() if j['config'].get('source') == 'live' and j['config'].get('scope')=='nasdaq']
 
     @app.post('/api/jobs', status_code=202)
     def submit(config: Experiment):
@@ -134,7 +134,10 @@ def create_app(root=None):
     @app.get('/api/results/{job_id}')
     def result(job_id: str):
         try:
-            return app.state.store.result(job_id)
+            result=app.state.store.result(job_id)
+            if result and result.get('scope')!='nasdaq':
+                raise HTTPException(404,'此為舊股票池結果，請使用 Nasdaq 股票池重新執行。')
+            return result
         except KeyError:
             raise HTTPException(404, '工作不存在。')
 

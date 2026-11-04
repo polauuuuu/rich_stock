@@ -54,6 +54,7 @@ def test_cancel_does_not_overwrite_completed_state(tmp_path):
 
 
 def test_replace_rejects_incomplete_adjusted_history(tmp_path):
+    (tmp_path/'universe.json').write_text(json.dumps({'scope':'nasdaq','included':[{'symbol':'A'}]}))
     s = Store(tmp_path)
     old = pd.DataFrame(dict(symbol=['A','A'], date=pd.to_datetime(['2025-02-03','2025-02-04']), close=[10,12]))
     s.merge('live', 'A', old)

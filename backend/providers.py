@@ -50,10 +50,10 @@ def request(client, url, params=None, check=lambda: None):
 
 def fetch_universe(client, check):
     kept, excluded = [], []
-    for filename in ['nasdaqlisted.txt', 'otherlisted.txt']:
+    for filename in ['nasdaqlisted.txt']:
         text = request(client, 'https://www.nasdaqtrader.com/dynamic/SymDir/' + filename, check=check).text
         a, b = parse_directory(text)
-        kept.extend(a)
+        kept.extend(r | {'exchange':'NASDAQ'} for r in a)
         excluded.extend(b)
     return list({r['symbol']: r for r in kept}.values()), excluded
 

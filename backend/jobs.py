@@ -23,6 +23,7 @@ class Jobs:
         self.events = {}
 
     def submit(self, config):
+        config = config | {'scope':'nasdaq'}
         if config['kind'] == 'download':
             credentials()
         with self.lock:
@@ -64,6 +65,7 @@ class Jobs:
                 result = (backtest(frame, config, check=check) if config['kind'] == 'backtest'
                           else train_model(frame, config, check))
             result['source'] = config['source']
+            result['scope'] = 'nasdaq'
             result['created'] = now()
             encoded = json.dumps(result, allow_nan=False)
             with self.lock:
@@ -82,13 +84,19 @@ class Jobs:
     def download(self, config, progress, check):
         with httpx.Client(timeout=45) as public:
             universe, excluded = fetch_universe(public, check)
-        snapshot = dict(updated=now(), included=universe, excluded=excluded)
+        snapshot = dict(scope='nasdaq', updated=now(), included=universe, excluded=excluded)
         path = self.store.root / 'universe.json'
         tmp = path.with_suffix('.tmp')
         tmp.write_text(json.dumps(snapshot, ensure_ascii=False), encoding='utf-8')
         tmp.replace(path)
+        with self.store.lock:
+            self.store.cache.pop('live',None)
         selected = config.get('symbols', '').upper().replace(' ', '').split(',')
         symbols = selected if selected != [''] else [r['symbol'] for r in universe]
+        allowed={r['symbol'] for r in universe}
+        outside=sorted(set(symbols)-allowed)
+        if outside:
+            raise ValueError('只支援目前 Nasdaq 股票池：'+','.join(outside[:20])+' 不在名單。')
         end = min(config.get('end') or latest_completed_session(), latest_completed_session())
         start = config.get('start') or str((pd.Timestamp(end) - pd.DateOffset(years=1)).date())
         if start > end:

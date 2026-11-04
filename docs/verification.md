@@ -37,6 +37,14 @@
 - 首次載入既有完成紀錄不會觸發重掃循環。6 個前端測試通過（新增 2 個下載完成轉換測試），production build 成功。
 - 獨立覆核發現同交易日相同 ticker 可能不觸發 bars effect，已新增 successful-scan revision 作為依賴修正。沒有加入定時下載或即時報價。
 
+## 固定頁首、頁尾及可讀性
+
+- 將本機重掃／下載操作移入 sticky 頂部列；footer 固定於視窗底部，窄版置於底部導覽上方，內容保留相應下方空間。
+- 主要欄位及表格放大至 14–15px；標題、價量核對、輔助說明及圖表標籤同步放大，調整行距及按鈕高度。
+- Browser QA：324px 窄版捲動 2,426px 後 header top=0，footer bottom=546（視窗 612px、底部導覽 66px）；輸入欄位 14px，沒有橫向頁面溢出。
+- 1440×900 桌面版捲動後 header top=0、footer bottom=900；欄位 15px、表頭 14px。光暗模式固定列均為不透明背景；已恢復原本主題及 viewport。
+- TypeScript/Vite production build 及 Docker 建置通過，容器部署完成。此為排版調整，使用瀏覽器實測而沒有新增鏡像 CSS 的單元測試。
+
 ## 獨立覆核
 
 獨立 reviewer 檢視後端、前端及容器設定，提出四項重要問題；全部已有回歸驗證：

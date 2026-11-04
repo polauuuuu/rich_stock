@@ -1,0 +1,9 @@
+{
+  "name": "rich-stock-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {"dev": "vite --host 127.0.0.1 --port 6002 --strictPort", "build": "tsc -b && vite build", "test": "node --experimental-strip-types --test tests/result-loader.test.ts", "preview": "vite preview --host 127.0.0.1 --port 6002 --strictPort"},
+  "dependencies": {"react": "19.0.0", "react-dom": "19.0.0", "recharts": "2.15.3", "lucide-react": "0.468.0"},
+  "devDependencies": {"@types/react": "19.0.12", "@types/react-dom": "19.0.4", "@vitejs/plugin-react": "4.4.1", "typescript": "5.8.3", "vite": "6.3.4"}
+}

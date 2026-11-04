@@ -11,7 +11,7 @@ type Row = { symbol: string; date: string; open: number; high: number; low: numb
 type Coverage = { symbols: number; bars: number; start: string | null; end: string | null }
 type Status = { datasets: Record<Source, Coverage>; credentials_configured: boolean; warning: string; universe: { updated: string; included: number; excluded: number } | null }
 type Config = { decline_mode: 'close'|'candle'|'both'; down_days: number; volume_days: number; min_price: number; min_dollar_volume: number; holding_days: number; stop_loss: number; take_profit: number; cost_bps: number; max_positions: number; capital: number; top_k: number; start: string; end: string; model: string; symbols: string }
-type Job = { id: string; kind: string; state: string; progress: number; message: string; created: string; config: { source: Source } }
+type Job = { id: string; kind: string; state: string; progress: number; message: string; created: string; config: { source: Source; symbols?: string } }
 type Trade = { symbol: string; entry_date: string; exit_date: string; entry_price: number; exit_price: number; qty: number; pnl: number; return_pct: number; reason: string }
 type BT = { metrics: { total_return_pct: number; max_drawdown_pct: number; win_rate_pct: number; average_trade_pct: number; trades: number; open_positions: number }; equity: { date: string; equity: number }[]; trades: Trade[]; open_positions: unknown[] }
 type Eval = { samples: number; start: string; end: string; positive_rate: number; pr_auc: number; roc_auc: number; top_k_hit_rate: number }
@@ -151,6 +151,7 @@ export default function App() {
   }
 
   const coverage = status?.datasets[source]
+  const fullMarketDone = jobs.find(j => j.kind === 'download' && !j.config.symbols)?.state === 'completed'
   const activeJob = jobs.find(j => ['running', 'queued', 'cancelling'].includes(j.state))
   const currentJob = jobs.find(j => j.id === resultId)
   const filtered = rows.filter(r => r.symbol.toLowerCase().includes(query.toLowerCase())).sort((a, b) => {
@@ -172,7 +173,7 @@ export default function App() {
     </aside>
     <main><header className="topbar"><div className="breadcrumb">工作空間 <ChevronRight size={13}/> <span>{labels[tab]}</span></div><div className="top-actions"><button className="theme-toggle" aria-label={theme === 'dark' ? '切換淺色模式' : '切換深色模式'} onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>{theme === 'dark' ? <Sun size={17}/> : <Moon size={17}/>}<span>{theme === 'dark' ? '淺色' : '深色'}</span></button><span className="local-status"><span className="online-dot"/>本機運行</span><span className="badge">ALPACA SIP · 真實數據</span></div></header>
       <div className="content"><div className="page-heading"><div><div className="eyebrow">{tab === 'scan' ? 'DISCOVER THE NEXT SETUP' : tab === 'backtest' ? 'TEST BEFORE YOU TRUST' : tab === 'ml' ? 'EVIDENCE OVER INTUITION' : 'YOUR RESEARCH FOUNDATION'}</div><h1>{labels[tab]}<span className="beta">RESEARCH</span></h1><p>{tab === 'scan' ? '捕捉連跌縮量形態，尋找值得進一步研究的回調機會。' : tab === 'backtest' ? '將交易假設放進歷史，觀察成本、回撤與真正的持倉結果。' : tab === 'ml' ? '以時間切分驗證，研究模型能否超越純規則篩選。' : '管理股票池、歷史日線及下載工作，讓每個結果都有依據。'}</p></div><button className="button secondary" onClick={() => { refreshStatus().catch(e => setError(e.message)); if (tab === 'scan') scan() }}><RefreshCw size={15}/>重新整理</button></div>
-        <div className="source-banner live"><div><span className="banner-dot"/><strong>Alpaca SIP · 真實歷史數據</strong><span>已下載 {coverage?.symbols || 0} / {status?.universe?.included || '—'} 隻上市股票。{status?.universe && (coverage?.symbols || 0) < status.universe.included ? '股票池尚未下載完成，掃描只涵蓋已保存股票。' : '使用當前上市名單，存在生存者偏差。'}</span></div><button className="text-button" onClick={() => setTab('data')}>管理下載 <ArrowRight size={13}/></button></div>
+        <div className="source-banner live"><div><span className="banner-dot"/><strong>Alpaca SIP · 真實歷史數據</strong><span>已下載 {coverage?.symbols || 0} / {status?.universe?.included || '—'} 隻上市股票。{fullMarketDone ? '完整名單已處理；個別股票可能沒有可用日線，詳見下載結果。' : status?.universe && (coverage?.symbols || 0) < status.universe.included ? '股票池尚未下載完成，掃描只涵蓋已保存股票。' : '使用當前上市名單，存在生存者偏差。'}</span></div><button className="text-button" onClick={() => setTab('data')}>管理下載 <ArrowRight size={13}/></button></div>
         {error && <div className="error" role="alert"><span>{error}</span><button aria-label="關閉錯誤" onClick={() => setError('')}><X size={16}/></button></div>}
         {activeJob && <div className="job-banner"><LoaderCircle size={17} className="spin"/><div><strong>{states[activeJob.state]} · {activeJob.kind === 'train' ? '模型實驗' : activeJob.kind === 'download' ? '數據下載' : '策略回測'}</strong><small>{activeJob.message}</small><progress max={1} value={activeJob.progress}/></div><button className="button secondary small" disabled={activeJob.state === 'cancelling'} onClick={() => api('/jobs/' + activeJob.id + '/cancel', { method: 'POST' }).catch(e => setError(e.message))}>取消</button></div>}
         {currentJob && ['failed', 'cancelled', 'interrupted'].includes(currentJob.state) && <div className="error" role="status">{states[currentJob.state]}：{currentJob.message}</div>}
